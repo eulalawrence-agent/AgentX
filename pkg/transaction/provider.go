@@ -19,6 +19,7 @@ const DefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 type Provider struct {
 	httpClient *http.Client
 	userAgent  string
+	cookie     string
 	ttl        time.Duration
 
 	mu        sync.Mutex
@@ -40,6 +41,15 @@ func WithUserAgent(ua string) ProviderOption {
 	return func(p *Provider) { p.userAgent = ua }
 }
 
+// WithCookie sets the Cookie header used when fetching x.com. Sending a
+// logged-in cookie returns the authenticated home page, which is what carries
+// the ondemand.s index/hash needed to derive the transaction-id keys. Without
+// it the logged-out shell page has no ondemand.s reference and transaction-id
+// generation fails.
+func WithCookie(c string) ProviderOption {
+	return func(p *Provider) { p.cookie = c }
+}
+
 // WithTTL sets how long fetched home/ondemand data is reused (default 3h).
 func WithTTL(d time.Duration) ProviderOption {
 	return func(p *Provider) { p.ttl = d }
@@ -56,6 +66,19 @@ func NewProvider(opts ...ProviderOption) *Provider {
 		o(p)
 	}
 	return p
+}
+
+// SetCookie updates the cookie used when fetching x.com and invalidates any
+// cached generator so the next TransactionID call re-fetches with the new
+// cookie (needed when the shared provider is used across accounts).
+func (p *Provider) SetCookie(c string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if c != p.cookie {
+		p.cookie = c
+		p.gen = nil
+		p.fetchedAt = time.Time{}
+	}
 }
 
 // TransactionID returns a fresh x-client-transaction-id for the method/path,
@@ -114,6 +137,9 @@ func (p *Provider) fetch(rawURL string) (string, error) {
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	req.Header.Set("Referer", "https://x.com")
 	req.Header.Set("Cache-Control", "no-cache")
+	if p.cookie != "" {
+		req.Header.Set("Cookie", p.cookie)
+	}
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
