@@ -52,6 +52,13 @@ func (a *Agent) client(name string) (*xclient.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Ensure the shared transaction provider fetches x.com with a logged-in
+	// cookie so it can discover the ondemand.s index/hash (absent from the
+	// logged-out shell page). Keys are account-independent, so setting it from
+	// whichever account resolves first is correct and cached across accounts.
+	if a.tx != nil {
+		a.tx.SetCookie(acc.Cookie())
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if cl, ok := a.clients[acc.Name]; ok {
