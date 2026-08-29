@@ -40,6 +40,8 @@ jobs:
           path: dist/${{ matrix.bin }}
 
   release:
+    permissions:
+      contents: write
     name: Publish Release
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
