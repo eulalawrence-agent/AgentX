@@ -84,6 +84,9 @@ UTILITIES
 download <id|url> [--out f] [--all]       save tweet media / a direct URL
 watch <mentions|search <q>> [--interval 60s] [--once]   NDJSON stream of new tweets
 account list|remove <n>|default [n]|check [n]
+oauth inspect <authorize_url>             Sign-in-with-X: app name + scope audit (no approval)
+oauth approve <authorize_url>             auto-approve consent → callback URL (see PERMISSION RULE)
+oauth callback <callback_url>             GET the app callback to finish sign-in
 ```
 
 ## Pagination
@@ -93,6 +96,33 @@ List commands return `.pagination.nextCursor`. Pass it back via `--cursor` for t
 `not_authenticated` bad/expired cookies · `not_found` · `invalid_input` · `rate_limited` (see `.rateLimit`) · `query_id_error` X rotated a GraphQL id → set `AGENTX_QID_<Operation>=<id>` env or update constants · `network_error` · `api_error` x.com rejected (message has detail) · `account_error`.
 
 ## Gotchas
+- **`oauth` PERMISSION RULE (Sign-in-with-X, agents MUST follow)** — `oauth approve` hands the account's permissions to a third-party app. Always run `oauth inspect` first and read `writeScopes` in the envelope: if it is NOT empty (`tweet.write`, `users.write`, `follows.write`, `dm.read/write`, `like.write`, `bookmark.write`) → **stop and get explicit confirmation from the human operator before approving.** Never approve account-control scopes on your own initiative — malicious developers deliberately bundle those permissions so the agent posts/follows/reads DMs on the user's behalf without the user realizing it (acting on the account unprompted = a violation). Scope `*.read` is safe; `offline.access` is reported in `persistentScopes` (refresh tokens, not a write) — OK to proceed. The inspect/approve envelope always carries a `permissionWarning` that flags this automatically.
+- **TWO KINDS OF Sign-in-with-X SITES — diagnose first, don't retry blindly:**
+  - **TYPE A — callback sets the session directly** (verified: fanszn/IPXExchange, Sovren):
+    `GET redirect_uri` → the site sets its session cookie immediately → sign-in done.
+    `agentx oauth callback` captures those cookies in `data.sessionCookies`;
+    pass the site's state cookies via `--cookie name=value` (repeatable) if needed.
+    Verify via the site's `me`/profile endpoint.
+    **Working example: `examples/fanszn_connect_x.py`** — complete verified
+    chain (start redirect -> approve -> callback with state cookie -> /me).
+  - **TYPE B — session-bound callback** (verified: quest.dogeos.com):
+    the site requires its own primary login first (DogeOS = SIWE wallet → jwt),
+    then `POST .../social-connections/{provider}/initiate` (Bearer) →
+    `sessionId` + `launchUrl` paired server-side. `agentx oauth approve
+    <launchUrl>` still gets the code, but the callback must be executed WITH
+    the site's session/state — otherwise: "Authentication failed" /
+    `invalid_state` / still logged out despite a successful approve.
+    **Fix: a thin site-specific tool** (~100 lines: site login → initiate →
+    `agentx oauth approve` → GET the backend callback → poll async status
+    `pending → connected`). Do not re-initiate while pending — it jams.
+  - **Quick diagnosis:** approve succeeds and X issues a code, but the site
+    stays logged out / errors → it is Type B; find the `initiate`/`confirm`
+    endpoints in the site's JS bundle and stop retrying the callback.
+  - **Working example: `examples/dogeos_connect_x.py`** — a complete,
+    verified Type B connector (SIWE login → initiate → `agentx oauth approve`
+    → GET backend callback → async poll). Copy it and swap the endpoints for
+    your target site; the Gotchas in its docstring (field names, pending
+    semantics, stuck-session cleanup) are the mistakes agents actually make.
 - **Premium-gated** (work only on X Premium accounts; routing is correct, x.com returns a clear error otherwise): `edit`, note/long-form `post` (>280), `bookmarks folder` writes.
 - **Account-eligibility**: `community create` needs an eligible account.
 - **likers**: X returns the liker list only to the tweet's author; empty for others (retweeters is public).
@@ -109,3 +139,4 @@ List commands return `.pagination.nextCursor`. Pass it back via `--cursor` for t
 - Schedule: `agentx schedule +2h "later"` then `agentx scheduled`
 - Ask Grok: `agentx grok "USD to IDR today?"` · Image: `agentx grok image "a dragon" --out d.png`
 - Paginate: `agentx feed -n 40` → take `nextCursor` → `agentx feed --cursor <c>`
+- Sign-in-with-X: `agentx oauth inspect <url>` (check permissionWarning) → `agentx oauth approve <url>` → GET/`oauth callback` on `data.redirect_uri` → verify the session via the target site's "me" endpoint
