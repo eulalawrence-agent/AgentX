@@ -108,14 +108,31 @@ func (p *Provider) generator() (*Generator, error) {
 	return p.gen, nil
 }
 
+// homePageURLs are tried in order. x.com migrated the homepage to a new
+// x-web (Vite) bundle around 2026-09-25: /home no longer ships the
+// responsive-web webpack runtime map (the `,<idx>:"ondemand.s"` entry the
+// generator needs), so getOndemandFileURL finds nothing there and every
+// write fails with "couldn't locate ondemand.s file index". /i/jf/ still
+// serves the legacy responsive-web shell with the chunk map, the
+// twitter-site-verification key and the loading-x-anim frames, logged in or
+// out. /home is kept as a fallback for as long as it keeps working.
+var homePageURLs = []string{"https://x.com/i/jf/", "https://x.com"}
+
 func (p *Provider) refreshLocked() error {
-	homeHTML, err := p.fetch("https://x.com", p.cookie)
-	if err != nil {
-		return fmt.Errorf("transaction: fetch home page: %w", err)
+	var homeHTML string
+	var err error
+	for _, u := range homePageURLs {
+		homeHTML, err = p.fetch(u, p.cookie)
+		if err != nil {
+			return fmt.Errorf("transaction: fetch home page: %w", err)
+		}
+		if _, gerr := getOndemandFileURL(homeHTML); gerr == nil {
+			break
+		}
 	}
 	ondemandURL, err := getOndemandFileURL(homeHTML)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w (tried %v)", err, homePageURLs)
 	}
 	// The ondemand.s file is a static asset on abs.twimg.com: send no cookies.
 	ondemandText, err := p.fetch(ondemandURL, "")
